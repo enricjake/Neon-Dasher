@@ -190,12 +190,12 @@
     let highScore = +(localStorage.getItem('neon-dasher-best') || 0);
 
     // Config
-    const BASE_SPEED = 240;        // px/sec at start
-    const SPEED_RAMP = 6;          // px/sec added per second of play
-    const MAX_SPEED = 700;
-    const JUMP_VELOCITY = 360;      // px/sec upward impulse
-    const GRAVITY = 1200;           // px/sec^2 (only used in jump mode)
-    const PLAYER_LERP = 12;         // higher = snappier follow
+    const BASE_SPEED = 300;        // px/sec at start (≈ original 5px/frame @ 60fps)
+    const SPEED_RAMP = 14;         // px/sec added per second of play (was 6 — too gentle)
+    const MAX_SPEED = 1400;        // hard cap (was 700 — game plateaued ~77s)
+    const JUMP_VELOCITY = 420;     // px/sec upward impulse
+    const GRAVITY = 1400;          // px/sec^2 (only used in jump mode)
+    const PLAYER_LERP = 14;       // higher = snappier follow
     const PLAYER_X_RATIO = 0.15;    // player x as fraction of canvas width
 
     // Player
@@ -317,19 +317,31 @@
     function spawnObstacle() {
         const size = 30 + Math.random() * 24;
         const x = vw() + size;
-        const margin = size;
-        const y = margin + Math.random() * (vh() - margin * 2);
-        // Only reject if it would overlap a recently-spawned (near-right) obstacle
-        for (const obs of obstacles) {
-            if (obs.x > vw() - 80 && Math.abs(obs.y - y) < size * 1.5) return;
+        // Try several Y positions so high-speed double-spawns don't silently
+        // drop (which made the game feel sparse at top speed).
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const margin = size;
+            const y = margin + Math.random() * (vh() - margin * 2);
+            let tooClose = false;
+            for (const obs of obstacles) {
+                if (obs.x > vw() - 80 && Math.abs(obs.y - y) < size * 1.5) {
+                    tooClose = true;
+                    break;
+                }
+            }
+            if (!tooClose) {
+                obstacles.push({ x, y, size, color: '#f22', rot: 0 });
+                return;
+            }
         }
-        obstacles.push({ x, y, size, color: '#f22', rot: 0 });
     }
 
     function nextSpawnDelay() {
-        // seconds; shrinks as speed grows
-        const base = 1.1 - (speed - BASE_SPEED) / 600;
-        return Math.max(0.35, base + (Math.random() * 0.35 - 0.175));
+        // seconds; shrinks fast as speed grows. Original tightened
+        // aggressively with speed; this restores that feel.
+        const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED); // 0..1
+        const base = 0.85 - t * 0.62;   // 0.85s at start -> 0.23s at max
+        return Math.max(0.18, base + (Math.random() * 0.22 - 0.11));
     }
 
     function createParticles(x, y, color, count, speedScale = 1) {
@@ -376,6 +388,10 @@
             spawnAccum = 0;
             nextSpawnIn = nextSpawnDelay();
             spawnObstacle();
+            // Double-spawn at high speed: pack a second obstacle so the
+            // density keeps ramping instead of plateauing at the timer floor.
+            const t = (speed - BASE_SPEED) / (MAX_SPEED - BASE_SPEED);
+            if (t > 0.45 && Math.random() < t * 0.6) spawnObstacle();
         }
 
         // Obstacles
