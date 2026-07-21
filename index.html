@@ -16,7 +16,9 @@
             background-color: #000;
             overflow: hidden;
             font-family: 'Courier New', Courier, monospace;
-            touch-action: none; /* Prevents browser zooming/scrolling */
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
         }
 
         canvas {
@@ -29,7 +31,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            pointer-events: none; /* Let touches pass through to canvas */
+            pointer-events: none;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -44,28 +46,50 @@
             color: #0ff;
             font-size: 24px;
             font-weight: bold;
-            text-shadow: 0 0 10px #0ff;
+            text-shadow: 0 0 10px #0ff, 0 0 20px #0ff;
+        }
+
+        #best-display {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            color: #f22;
+            font-size: 18px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #f22;
         }
 
         #start-screen, #game-over-screen {
             background: rgba(0, 0, 0, 0.85);
-            padding: 40px;
+            padding: 40px 48px;
             border-radius: 16px;
             border: 1px solid #333;
-            box-shadow: 0 0 30px rgba(0, 255, 255, 0.1);
+            box-shadow: 0 0 30px rgba(0, 255, 255, 0.15), inset 0 0 20px rgba(0,255,255,0.05);
+            pointer-events: auto;
+            max-width: 90vw;
         }
 
         h1 {
             color: #fff;
-            font-size: 32px;
-            margin-bottom: 10px;
-            text-shadow: 0 0 15px #0ff;
+            font-size: 36px;
+            margin-bottom: 14px;
+            letter-spacing: 2px;
+            text-shadow: 0 0 15px #0ff, 0 0 30px #0ff;
         }
 
         p {
             color: #aaa;
             font-size: 16px;
-            line-height: 1.5;
+            line-height: 1.6;
+        }
+
+        .controls {
+            color: #666;
+            font-size: 13px;
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid #222;
+            line-height: 1.7;
         }
 
         .highlight {
@@ -73,18 +97,29 @@
             font-weight: bold;
         }
 
+        .danger { color: #f22; }
+
         .btn {
-            margin-top: 20px;
-            padding: 14px 32px;
+            margin-top: 24px;
+            padding: 14px 36px;
             font-size: 18px;
             font-family: inherit;
+            font-weight: bold;
+            letter-spacing: 2px;
             background: transparent;
             color: #0ff;
             border: 2px solid #0ff;
             border-radius: 8px;
             cursor: pointer;
-            pointer-events: auto; /* Re-enable clicks for buttons */
-            transition: all 0.2s;
+            pointer-events: auto;
+            transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3), inset 0 0 10px rgba(0,255,255,0.1);
+        }
+
+        .btn:hover {
+            background: #0ff;
+            color: #000;
+            box-shadow: 0 0 20px #0ff;
         }
 
         .btn:active {
@@ -101,16 +136,19 @@
 
     <div id="ui-layer">
         <div id="score-display">Score: 0</div>
-        
+        <div id="best-display" class="hidden">BEST: 0</div>
+
         <div id="start-screen">
-            <h1>NEON Dasher</h1>
-            <p>Tap or Swipe to move<br>Don't hit the <span class="highlight" style="color:#f22">Red Obstacles</span></p>
+            <h1>NEON DASHER</h1>
+            <p>Dodge the <span class="danger">Red Obstacles</span></p>
             <button class="btn" id="start-btn">PLAY</button>
+            <div class="controls" id="controls-hint"></div>
         </div>
 
         <div id="game-over-screen" class="hidden">
             <h1>GAME OVER</h1>
-            <p>Score: <span id="final-score" class="highlight">0</span></p>
+            <p>Score: <span id="final-score" class="highlight">0</span><br>
+               Best: <span id="best-score" class="highlight">0</span></p>
             <button class="btn" id="restart-btn">RETRY</button>
         </div>
     </div>
@@ -118,6 +156,9 @@
     <canvas id="gameCanvas"></canvas>
 
 <script>
+(() => {
+    'use strict';
+
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
 
@@ -125,203 +166,304 @@
     const startScreen = document.getElementById('start-screen');
     const gameOverScreen = document.getElementById('game-over-screen');
     const scoreDisplay = document.getElementById('score-display');
+    const bestDisplay = document.getElementById('best-display');
     const finalScoreEl = document.getElementById('final-score');
+    const bestScoreEl = document.getElementById('best-score');
     const startBtn = document.getElementById('start-btn');
     const restartBtn = document.getElementById('restart-btn');
+    const controlsHint = document.getElementById('controls-hint');
+
+    // Device detection for controls hint
+    const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+    controlsHint.innerHTML = isTouch
+        ? 'Tap to jump&nbsp; · &nbsp;Drag to move'
+        : 'Mouse: move&nbsp; · &nbsp;Click: jump<br>Keyboard: Space / ↑ to jump';
 
     // Game State
     let gameRunning = false;
     let score = 0;
-    let speed = 5;
-    let animationId;
+    let speed = 0;          // px/sec, set in startGame
+    let animationId = null;
     let lastTime = 0;
-    let spawnTimer = 0;
+    let spawnAccum = 0;     // seconds since last spawn
+    let nextSpawnIn = 0;    // seconds until next spawn
+    let highScore = +(localStorage.getItem('neon-dasher-best') || 0);
+
+    // Config
+    const BASE_SPEED = 240;        // px/sec at start
+    const SPEED_RAMP = 6;          // px/sec added per second of play
+    const MAX_SPEED = 700;
+    const JUMP_VELOCITY = 360;      // px/sec upward impulse
+    const GRAVITY = 1200;           // px/sec^2 (only used in jump mode)
+    const PLAYER_LERP = 12;         // higher = snappier follow
+    const PLAYER_X_RATIO = 0.15;    // player x as fraction of canvas width
 
     // Player
     const player = {
-        x: 50,
+        x: 0,
         y: 0,
         radius: 15,
         targetY: 0,
+        vy: 0,            // vertical velocity (used for jump)
         color: '#0ff',
-        trail: []
+        trail: [],
+        jumping: false
     };
 
-    // Obstacles
     let obstacles = [];
-
-    // Particles
     let particles = [];
 
-    // Resize Canvas
+    // --- Canvas sizing (DPR-aware) ---
     function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-        // Reset player Y to center
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        canvas.width = Math.floor(window.innerWidth * dpr);
+        canvas.height = Math.floor(window.innerHeight * dpr);
+        canvas.style.width = window.innerWidth + 'px';
+        canvas.style.height = window.innerHeight + 'px';
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         if (!gameRunning) {
-            player.y = canvas.height / 2;
-            player.targetY = canvas.height / 2;
+            player.x = window.innerWidth * PLAYER_X_RATIO;
+            player.y = window.innerHeight / 2;
+            player.targetY = player.y;
+        } else {
+            // Keep player on-screen when viewport changes mid-game (mobile URL bar)
+            player.x = window.innerWidth * PLAYER_X_RATIO;
+            clampTarget();
+            player.y = Math.min(player.y, vh() - player.radius);
+            player.y = Math.max(player.y, player.radius);
         }
     }
     window.addEventListener('resize', resize);
     resize();
 
-    // --- Input Handling ---
-    function movePlayer(dy) {
-        if (!gameRunning) return;
-        player.targetY += dy;
-        // Clamp to screen
-        if (player.targetY < player.radius) player.targetY = player.radius;
-        if (player.targetY > canvas.height - player.radius) player.targetY = canvas.height - player.radius;
+    // Logical viewport (CSS pixels)
+    const vw = () => window.innerWidth;
+    const vh = () => window.innerHeight;
+
+    // --- Input ---
+    function clampTarget() {
+        const r = player.radius;
+        if (player.targetY < r) player.targetY = r;
+        const max = vh() - r;
+        if (player.targetY > max) player.targetY = max;
     }
 
-    // Touch
-    let touchStartY = 0;
-    let touchStartX = 0;
-
-    canvas.addEventListener('touchstart', (e) => {
-        touchStartY = e.touches[0].clientY;
-        touchStartX = e.touches[0].clientX;
-    }, {passive: false});
-
-    canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault(); // Stop scrolling
-        const touchY = e.touches[0].clientY;
-        const diff = touchY - touchStartY;
-        movePlayer(diff);
-        touchStartY = touchY;
-    }, {passive: false});
-
-    canvas.addEventListener('touchend', () => {
-        // Tap logic
-        movePlayer(-80); // Default jump up on tap
-    }, {passive: false});
-
-    // Mouse (for testing on PC)
-    window.addEventListener('mousedown', (e) => {
-        movePlayer(-80);
-    });
+    function jump() {
+        if (!gameRunning) return;
+        player.vy = -JUMP_VELOCITY;
+        player.jumping = true;
+    }
 
     // Keyboard
     window.addEventListener('keydown', (e) => {
         if (e.code === 'Space' || e.code === 'ArrowUp') {
-            movePlayer(-80);
+            e.preventDefault();
+            jump();
         }
     });
 
-    // --- Game Logic ---
+    // Mouse: hold+drag = follow cursor Y; click (no drag) = jump
+    let mouseDown = false;
+    let mouseMoved = false;
+    canvas.addEventListener('mousedown', () => {
+        mouseDown = true;
+        mouseMoved = false;
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (mouseDown && gameRunning) {
+            mouseMoved = true;
+            player.targetY = e.clientY;
+            player.jumping = false;
+            player.vy = 0;
+            clampTarget();
+        }
+    });
+    window.addEventListener('mouseup', () => {
+        if (mouseDown && !mouseMoved && gameRunning) jump();
+        mouseDown = false;
+        mouseMoved = false;
+    });
 
+    // Touch: drag = follow finger; tap (no drag) = jump
+    let touchActive = false;
+    let touchMoved = false;
+
+    canvas.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        touchActive = true;
+        touchMoved = false;
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+        e.preventDefault();
+        const ty = e.touches[0].clientY;
+        touchMoved = true;
+        if (gameRunning) {
+            player.targetY = ty;
+            player.jumping = false;
+            player.vy = 0;
+            clampTarget();
+        }
+    }, { passive: false });
+
+    canvas.addEventListener('touchend', (e) => {
+        e.preventDefault();
+        if (touchActive && !touchMoved && gameRunning) jump();
+        touchActive = false;
+        touchMoved = false;
+    }, { passive: false });
+
+    // --- Spawning ---
     function spawnObstacle() {
-        // Obstacles move from right to left (or we can simulate scrolling)
-        // Let's do a classic runner: obstacles move towards player
-        const size = 30 + Math.random() * 20;
-        const x = canvas.width + 50;
-        const y = canvas.height / 2 + (Math.random() * canvas.height - canvas.height / 2);
-        
-        // Ensure obstacles don't spawn too close vertically to existing ones
-        let tooClose = false;
-        for (let obs of obstacles) {
-            if (Math.abs(obs.y - y) < size) {
-                tooClose = true;
-                break;
-            }
+        const size = 30 + Math.random() * 24;
+        const x = vw() + size;
+        const margin = size;
+        const y = margin + Math.random() * (vh() - margin * 2);
+        // Only reject if it would overlap a recently-spawned (near-right) obstacle
+        for (const obs of obstacles) {
+            if (obs.x > vw() - 80 && Math.abs(obs.y - y) < size * 1.5) return;
         }
-
-        if (!tooClose) {
-            obstacles.push({ x, y, size, color: '#f22' });
-        }
+        obstacles.push({ x, y, size, color: '#f22', rot: 0 });
     }
 
-    function createParticles(x, y, color, count) {
+    function nextSpawnDelay() {
+        // seconds; shrinks as speed grows
+        const base = 1.1 - (speed - BASE_SPEED) / 600;
+        return Math.max(0.35, base + (Math.random() * 0.35 - 0.175));
+    }
+
+    function createParticles(x, y, color, count, speedScale = 1) {
         for (let i = 0; i < count; i++) {
+            const ang = Math.random() * Math.PI * 2;
+            const sp = (Math.random() * 4 + 1) * 60 * speedScale;
             particles.push({
                 x, y,
-                vx: (Math.random() - 0.5) * 8,
-                vy: (Math.random() - 0.5) * 8,
+                vx: Math.cos(ang) * sp,
+                vy: Math.sin(ang) * sp,
                 life: 1.0,
-                color: color
+                decay: 1.2 + Math.random() * 0.8,
+                color
             });
         }
     }
 
-    function update() {
-        // Increase difficulty
-        speed += 0.003;
-        score++;
-        scoreDisplay.innerText = `Score: ${Math.floor(score / 10)}`;
+    // --- Update (deltaTime in seconds) ---
+    function update(dt) {
+        // Difficulty ramp
+        speed = Math.min(MAX_SPEED, speed + SPEED_RAMP * dt);
+        score += dt * 100;
+        scoreDisplay.textContent = `Score: ${Math.floor(score)}`;
 
-        // Smooth player movement (Lerp)
-        player.y += (player.targetY - player.y) * 0.15;
+        // Player vertical motion
+        if (player.jumping) {
+            player.vy += GRAVITY * dt;
+            player.targetY += player.vy * dt;
+            clampTarget();
+            // Stop jump arc when we settle back near target range
+            if (player.targetY >= vh() - player.radius - 1 && player.vy > 0) {
+                player.jumping = false;
+                player.vy = 0;
+            }
+        }
+        // Lerp toward target
+        const t = 1 - Math.exp(-PLAYER_LERP * dt);
+        player.y += (player.targetY - player.y) * t;
+        player.x = vw() * PLAYER_X_RATIO;
 
-        // Spawn obstacles
-        spawnTimer++;
-        if (spawnTimer > 60 - (speed * 2)) { // Spawn faster as game speeds up
-            spawnTimer = 0;
+        // Spawning
+        spawnAccum += dt;
+        if (spawnAccum >= nextSpawnIn) {
+            spawnAccum = 0;
+            nextSpawnIn = nextSpawnDelay();
             spawnObstacle();
         }
 
-        // Update Obstacles
+        // Obstacles
         for (let i = obstacles.length - 1; i >= 0; i--) {
-            let obs = obstacles[i];
-            obs.x -= speed;
+            const obs = obstacles[i];
+            obs.x -= speed * dt;
+            obs.rot += dt * 2;
 
-            // Collision Detection
+            // Collision (circle vs circle approx for diamond)
             const dx = player.x - obs.x;
             const dy = player.y - obs.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const minDist = player.radius + obs.size / 2;
-
-            if (dist < minDist) {
-                gameOver();
+            const minDist = player.radius + obs.size * 0.42;
+            if (dx * dx + dy * dy < minDist * minDist) {
+                return gameOver();
             }
-
-            // Remove off-screen
-            if (obs.x < -100) {
-                obstacles.splice(i, 1);
-            }
+            if (obs.x < -obs.size) obstacles.splice(i, 1);
         }
 
-        // Update Particles
+        // Particles
         for (let i = particles.length - 1; i >= 0; i--) {
-            let p = particles[i];
-            p.x += p.vx;
-            p.y += p.vy;
-            p.life -= 0.05;
+            const p = particles[i];
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vy += 200 * dt;
+            p.life -= p.decay * dt;
             if (p.life <= 0) particles.splice(i, 1);
         }
     }
 
-    function draw() {
-        // Clear Screen
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // Trail effect
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // --- Draw ---
+    let bgOffset = 0;
+    let lastBgTime = 0;
+    function drawBackground(ts) {
+        // Trail fade
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+        ctx.fillRect(0, 0, vw(), vh());
 
-        // Draw Particles
-        particles.forEach(p => {
-            ctx.globalAlpha = p.life;
+        // Scrolling grid (time-based, frame-rate independent)
+        if (!lastBgTime) lastBgTime = ts;
+        const bdt = (ts - lastBgTime) / 1000;
+        lastBgTime = ts;
+        bgOffset = (bgOffset - speed * bdt) % 40;
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.06)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const grid = 40;
+        for (let x = bgOffset; x < vw(); x += grid) {
+            ctx.moveTo(x, 0); ctx.lineTo(x, vh());
+        }
+        for (let y = 0; y < vh(); y += grid) {
+            ctx.moveTo(0, y); ctx.lineTo(vw(), y);
+        }
+        ctx.stroke();
+    }
+
+    function draw(ts) {
+        drawBackground(ts);
+
+        // Particles
+        ctx.save();
+        for (const p of particles) {
+            ctx.globalAlpha = Math.max(0, p.life);
             ctx.fillStyle = p.color;
             ctx.beginPath();
             ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
             ctx.fill();
-        });
-        ctx.globalAlpha = 1;
+        }
+        ctx.restore();
 
-        // Draw Player Trail
+        // Trail
         if (gameRunning) {
             player.trail.push({ x: player.x, y: player.y });
-            if (player.trail.length > 10) player.trail.shift();
-
-            player.trail.forEach((t, i) => {
-                ctx.globalAlpha = 0.3 + (i / 10) * 0.5;
+            if (player.trail.length > 12) player.trail.shift();
+            ctx.save();
+            for (let i = 0; i < player.trail.length; i++) {
+                const tr = player.trail[i];
+                const a = 0.2 + (i / player.trail.length) * 0.4;
+                ctx.globalAlpha = a;
                 ctx.fillStyle = player.color;
                 ctx.beginPath();
-                ctx.arc(t.x, t.y, player.radius * (i / 10), 0, Math.PI * 2);
+                ctx.arc(tr.x, tr.y, player.radius * (i / player.trail.length), 0, Math.PI * 2);
                 ctx.fill();
-            });
-            ctx.globalAlpha = 1;
+            }
+            ctx.restore();
         }
 
-        // Draw Player
+        // Player
+        ctx.save();
         ctx.shadowBlur = 20;
         ctx.shadowColor = player.color;
         ctx.fillStyle = player.color;
@@ -329,84 +471,110 @@
         ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
-
-        // Draw Eyes on player (cute factor)
+        // Eyes (face direction of travel)
         ctx.fillStyle = '#000';
-        const eyeOffset = 5;
+        const eyeOffsetX = 5, eyeOffsetY = -2, eyeR = 2.6;
+        const look = player.jumping ? -1 : (player.targetY < player.y - 2 ? -1 : player.targetY > player.y + 2 ? 1 : 0);
         ctx.beginPath();
-        ctx.arc(player.x - eyeOffset, player.y - 3, 3, 0, Math.PI * 2);
-        ctx.arc(player.x + eyeOffset, player.y - 3, 3, 0, Math.PI * 2);
+        ctx.arc(player.x - eyeOffsetX, player.y + eyeOffsetY + look, eyeR, 0, Math.PI * 2);
+        ctx.arc(player.x + eyeOffsetX, player.y + eyeOffsetY + look, eyeR, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
 
-        // Draw Obstacles
-        obstacles.forEach(obs => {
+        // Obstacles
+        for (const obs of obstacles) {
+            ctx.save();
+            ctx.translate(obs.x, obs.y);
+            ctx.rotate(obs.rot);
             ctx.shadowBlur = 15;
             ctx.shadowColor = obs.color;
             ctx.fillStyle = obs.color;
-
-            // Draw a rounded rect or diamond
             ctx.beginPath();
-            ctx.moveTo(obs.x, obs.y - obs.size / 2);
-            ctx.lineTo(obs.x + obs.size / 2, obs.y);
-            ctx.lineTo(obs.x, obs.y + obs.size / 2);
-            ctx.lineTo(obs.x - obs.size / 2, obs.y);
+            ctx.moveTo(0, -obs.size / 2);
+            ctx.lineTo(obs.size / 2, 0);
+            ctx.lineTo(0, obs.size / 2);
+            ctx.lineTo(-obs.size / 2, 0);
             ctx.closePath();
             ctx.fill();
-            
-            // Inner core
             ctx.fillStyle = '#fff';
             ctx.beginPath();
-            ctx.arc(obs.x, obs.y, obs.size / 4, 0, Math.PI * 2);
+            ctx.arc(0, 0, obs.size / 5, 0, Math.PI * 2);
             ctx.fill();
-            ctx.shadowBlur = 0;
-        });
+            ctx.restore();
+        }
     }
 
-    function gameLoop(timestamp) {
+    function gameLoop(ts) {
         if (!gameRunning) return;
-
-        update();
-        draw();
+        if (!lastTime) lastTime = ts;
+        let dt = (ts - lastTime) / 1000;
+        lastTime = ts;
+        // Clamp dt to keep tab-switching stable
+        if (dt > 0.05) dt = 0.05;
+        update(dt);
+        draw(ts);
         animationId = requestAnimationFrame(gameLoop);
     }
 
     function gameOver() {
+        if (!gameRunning) return;
         gameRunning = false;
-        createParticles(player.x, player.y, '#f22', 20);
-        createParticles(player.x, player.y, '#0ff', 10);
-        
-        // Draw one last frame
-        draw();
-        
+        if (animationId) cancelAnimationFrame(animationId);
+        createParticles(player.x, player.y, '#f22', 24, 1.3);
+        createParticles(player.x, player.y, '#0ff', 12, 1.0);
+        const final = Math.floor(score);
+        if (final > highScore) {
+            highScore = final;
+            localStorage.setItem('neon-dasher-best', String(highScore));
+        }
+        draw(performance.now());
         setTimeout(() => {
-            finalScoreEl.innerText = Math.floor(score / 10);
+            finalScoreEl.textContent = final;
+            bestScoreEl.textContent = highScore;
             gameOverScreen.classList.remove('hidden');
             scoreDisplay.classList.add('hidden');
-        }, 500);
+            bestDisplay.classList.add('hidden');
+        }, 450);
     }
 
     function startGame() {
         startScreen.classList.add('hidden');
         gameOverScreen.classList.add('hidden');
         scoreDisplay.classList.remove('hidden');
-        
+        if (highScore > 0) {
+            bestDisplay.textContent = `BEST: ${highScore}`;
+            bestDisplay.classList.remove('hidden');
+        }
         obstacles = [];
         particles = [];
         player.trail = [];
         score = 0;
-        speed = 5;
-        spawnTimer = 0;
-        player.y = canvas.height / 2;
-        player.targetY = canvas.height / 2;
-        
+        speed = BASE_SPEED;
+        spawnAccum = 0;
+        nextSpawnIn = 0.8;
+        player.x = vw() * PLAYER_X_RATIO;
+        player.y = vh() / 2;
+        player.targetY = player.y;
+        player.vy = 0;
+        player.jumping = false;
         gameRunning = true;
-        lastTime = performance.now();
-        gameLoop(lastTime);
+        lastTime = 0;
+        animationId = requestAnimationFrame(gameLoop);
     }
+
+    // Pause loop when tab hidden so dt doesn't explode
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden && gameRunning) {
+            if (animationId) cancelAnimationFrame(animationId);
+        } else if (!document.hidden && gameRunning) {
+            lastTime = 0;
+            animationId = requestAnimationFrame(gameLoop);
+        }
+    });
 
     startBtn.addEventListener('click', startGame);
     restartBtn.addEventListener('click', startGame);
-
+})();
 </script>
 </body>
 </html>
