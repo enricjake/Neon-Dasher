@@ -112,6 +112,7 @@
             border-radius: 8px;
             cursor: pointer;
             pointer-events: auto;
+            touch-action: manipulation;
             transition: background 0.15s, color 0.15s, box-shadow 0.15s;
             box-shadow: 0 0 10px rgba(0, 255, 255, 0.3), inset 0 0 10px rgba(0,255,255,0.1);
         }
@@ -289,28 +290,34 @@
     let touchMoved = false;
 
     canvas.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        touchActive = true;
-        touchMoved = false;
+        if (e.target === canvas) {
+            e.preventDefault();
+            touchActive = true;
+            touchMoved = false;
+        }
     }, { passive: false });
 
     canvas.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        const ty = e.touches[0].clientY;
-        touchMoved = true;
-        if (gameRunning) {
-            player.targetY = ty;
-            player.jumping = false;
-            player.vy = 0;
-            clampTarget();
+        if (e.target === canvas) {
+            e.preventDefault();
+            const ty = e.touches[0].clientY;
+            touchMoved = true;
+            if (gameRunning) {
+                player.targetY = ty;
+                player.jumping = false;
+                player.vy = 0;
+                clampTarget();
+            }
         }
     }, { passive: false });
 
     canvas.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        if (touchActive && !touchMoved && gameRunning) jump();
-        touchActive = false;
-        touchMoved = false;
+        if (e.target === canvas) {
+            e.preventDefault();
+            if (touchActive && !touchMoved && gameRunning) jump();
+            touchActive = false;
+            touchMoved = false;
+        }
     }, { passive: false });
 
     // --- Spawning ---
