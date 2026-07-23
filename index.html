@@ -47,6 +47,11 @@
             font-size: 24px;
             font-weight: bold;
             text-shadow: 0 0 10px #0ff, 0 0 20px #0ff;
+            transition: transform 0.2s ease;
+        }
+
+        #score-display.bump {
+            transform: scale(1.2);
         }
 
         #best-display {
@@ -67,6 +72,12 @@
             box-shadow: 0 0 30px rgba(0, 255, 255, 0.15), inset 0 0 20px rgba(0,255,255,0.05);
             pointer-events: auto;
             max-width: 90vw;
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         h1 {
@@ -131,6 +142,24 @@
         .hidden {
             display: none !important;
         }
+
+        #combo-display {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff0;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 0 0 20px #ff0, 0 0 40px #ff0;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        #combo-display.show {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
@@ -138,6 +167,7 @@
     <div id="ui-layer">
         <div id="score-display">Score: 0</div>
         <div id="best-display" class="hidden">BEST: 0</div>
+        <div id="combo-display"></div>
 
         <div id="start-screen">
             <h1>NEON DASHER</h1>
@@ -172,11 +202,12 @@
     const startBtn = document.getElementById('start-btn');
     const restartBtn = document.getElementById('restart-btn');
     const controlsHint = document.getElementById('controls-hint');
+    const comboDisplay = document.getElementById('combo-display');
 
     const isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
     controlsHint.innerHTML = isTouch
-        ? 'Tap to jump&nbsp; · &nbsp;Drag to move'
-        : 'Mouse: move&nbsp; · &nbsp;Click: jump<br>Keyboard: Space / ↑ to jump';
+        ? 'Tap to jump&nbsp;·&nbsp;Drag to move'
+        : 'Mouse: move&nbsp;·&nbsp;Click: jump<br>Keyboard: Space / ↑ to jump';
 
     // Game State
     let gameRunning = false;
@@ -186,6 +217,9 @@
     let lastTime = 0;
     let spawnTimer = 0;
     let highScore = +(localStorage.getItem('neon-dasher-best') || 0);
+    let combo = 0;
+    let comboTimer = 0;
+    let screenShake = 0;
 
     // Player
     const player = {
@@ -194,7 +228,8 @@
         radius: 15,
         targetY: 0,
         color: '#0ff',
-        trail: []
+        trail: [],
+        invincible: 0
     };
 
     // Obstacles
@@ -202,6 +237,9 @@
 
     // Particles
     let particles = [];
+
+    // Background stars
+    let stars = [];
 
     // Resize Canvas
     function resize() {
@@ -211,6 +249,18 @@
         if (!gameRunning) {
             player.y = canvas.height / 2;
             player.targetY = canvas.height / 2;
+        }
+        // Generate stars
+        if (stars.length === 0) {
+            for (let i = 0; i < 100; i++) {
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    size: Math.random() * 2 + 1,
+                    speed: Math.random() * 0.5 + 0.1,
+                    brightness: Math.random() * 0.5 + 0.5
+                });
+            }
         }
     }
     window.addEventListener('resize', resize);
@@ -326,6 +376,17 @@
         // Smooth player movement (Lerp)
         player.y += (player.targetY - player.y) * 0.15;
 
+        // Combo system
+        comboTimer--;
+        if (comboTimer <= 0) {
+            combo = 0;
+            comboDisplay.classList.remove('show');
+        } else {
+            combo++;
+            comboDisplay.innerText = `COMBO x${combo}`;
+            comboDisplay.classList.add('show');
+        }
+
         // Spawn obstacles
         spawnTimer++;
         if (spawnTimer > 60 - (speed * 2)) { // Spawn faster as game speeds up
@@ -362,12 +423,32 @@
             p.life -= 0.05;
             if (p.life <= 0) particles.splice(i, 1);
         }
+
+        // Screen shake decay
+        if (screenShake > 0) {
+            screenShake *= 0.9;
+            if (screenShake < 0.5) screenShake = 0;
+        }
     }
 
     function draw() {
         // Clear Screen
         ctx.fillStyle = 'rgba(0, 0, 0, 0.3)'; // Trail effect
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Apply screen shake
+        ctx.save();
+        if (screenShake > 0) {
+            const shakeX = (Math.random() - 0.5) * screenShake * 2;
+            const shakeY = (Math.random() - 0.5) * screenShake * 2;
+            ctx.translate(shakeX, shakeY);
+        }
+
+        // Draw Background Grid
+        drawGrid();
+
+        // Draw Stars
+        drawStars();
 
         // Draw Particles
         particles.forEach(p => {
@@ -433,6 +514,49 @@
             ctx.fill();
             ctx.shadowBlur = 0;
         });
+
+        ctx.restore();
+    }
+
+    function drawGrid() {
+        ctx.strokeStyle = 'rgba(0, 255, 255, 0.05)';
+        ctx.lineWidth = 1;
+        
+        const gridSize = 50;
+        const offsetX = -player.x % gridSize;
+        const offsetY = -player.y % gridSize;
+
+        for (let x = offsetX; x < canvas.width; x += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, canvas.height);
+            ctx.stroke();
+        }
+
+        for (let y = offsetY; y < canvas.height; y += gridSize) {
+            ctx.beginPath();
+            ctx.moveTo(0, y);
+            ctx.lineTo(canvas.width, y);
+            ctx.stroke();
+        }
+    }
+
+    function drawStars() {
+        stars.forEach(star => {
+            ctx.globalAlpha = star.brightness;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Move stars slowly
+            star.y += star.speed;
+            if (star.y > canvas.height) {
+                star.y = 0;
+                star.x = Math.random() * canvas.width;
+            }
+        });
+        ctx.globalAlpha = 1;
     }
 
     function gameLoop(timestamp) {
@@ -481,6 +605,9 @@
         score = 0;
         speed = 5;
         spawnTimer = 0;
+        combo = 0;
+        comboTimer = 0;
+        screenShake = 0;
         player.y = canvas.height / 2;
         player.targetY = canvas.height / 2;
         
