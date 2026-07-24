@@ -1,3 +1,4 @@
 .juno_task/
 .DS_Store
 *.log
+.aider*

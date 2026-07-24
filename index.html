@@ -160,6 +160,92 @@
         #combo-display.show {
             opacity: 1;
         }
+
+        #speed-meter {
+            position: absolute;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none;
+        }
+
+        #speed-meter .label {
+            color: #888;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+
+        #speed-meter .bar {
+            width: 120px;
+            height: 6px;
+            background: #222;
+            border-radius: 3px;
+            overflow: hidden;
+            border: 1px solid #333;
+        }
+
+        #speed-meter .fill {
+            height: 100%;
+            width: 0%;
+            background: #0ff;
+            border-radius: 3px;
+            transition: width 0.3s ease, background 0.5s ease;
+            box-shadow: 0 0 6px #0ff;
+        }
+
+        #speed-tier {
+            position: absolute;
+            top: 18px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-24px);
+            color: #0ff;
+            font-size: 11px;
+            letter-spacing: 2px;
+            opacity: 0;
+            transition: opacity 0.4s ease, color 0.5s ease;
+            pointer-events: none;
+        }
+
+        #speed-tier.show {
+            opacity: 1;
+        }
+
+        #vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.6) 100%);
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+
+        #close-flash {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            background: rgba(255, 255, 255, 0.08);
+            opacity: 0;
+            transition: opacity 0.1s ease;
+        }
+
+        .speed-badge {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #555;
+            font-size: 13px;
+            pointer-events: none;
+            transition: color 0.5s ease;
+        }
     </style>
 </head>
 <body>
@@ -168,6 +254,14 @@
         <div id="score-display">Score: 0</div>
         <div id="best-display" class="hidden">BEST: 0</div>
         <div id="combo-display"></div>
+        <div id="speed-meter">
+            <span class="label">SPD</span>
+            <div class="bar"><div class="fill" id="speed-fill"></div></div>
+        </div>
+        <div id="speed-tier"></div>
+        <div id="vignette"></div>
+        <div id="close-flash"></div>
+        <div class="speed-badge" id="speed-badge"></div>
 
         <div id="start-screen">
             <h1>NEON DASHER</h1>
@@ -209,6 +303,13 @@
         ? 'Tap to jump&nbsp;·&nbsp;Drag to move'
         : 'Mouse: move&nbsp;·&nbsp;Click: jump<br>Keyboard: Space / ↑ to jump';
 
+    // UI Elements
+    const speedFill = document.getElementById('speed-fill');
+    const speedTierEl = document.getElementById('speed-tier');
+    const vignetteEl = document.getElementById('vignette');
+    const closeFlash = document.getElementById('close-flash');
+    const speedBadge = document.getElementById('speed-badge');
+
     // Game State
     let gameRunning = false;
     let score = 0;
@@ -220,6 +321,19 @@
     let combo = 0;
     let comboTimer = 0;
     let screenShake = 0;
+    let closeCallTimer = 0;
+    let currentTier = 0;
+    let baseHue = 180; // cyan
+
+    // Speed tiers (score thresholds at which the game intensifies)
+    const SPEED_TIERS = [
+        { score: 0,    label: '',          hue: 180, spawnMul: 1 },
+        { score: 500,  label: 'TURBO',     hue: 200, spawnMul: 0.85 },
+        { score: 1500, label: 'OVERDRIVE', hue: 270, spawnMul: 0.7 },
+        { score: 3000, label: 'HYPERSPEED',hue: 330, spawnMul: 0.55 },
+        { score: 5000, label: 'LUDICROUS', hue: 40,  spawnMul: 0.4 },
+        { score: 8000, label: 'IMPOSSIBLE',hue: 0,   spawnMul: 0.3 },
+    ];
 
     // Player
     const player = {
@@ -335,23 +449,29 @@
     // --- Game Logic ---
 
     function spawnObstacle() {
-        // Obstacles move from right to left (or we can simulate scrolling)
-        // Let's do a classic runner: obstacles move towards player
-        const size = 30 + Math.random() * 20;
+        const tier = currentTier;
+        // Larger obstacles at higher tiers
+        const minSize = 30 + tier * 3;
+        const maxSize = 50 + tier * 6;
+        const size = minSize + Math.random() * (maxSize - minSize);
         const x = canvas.width + 50;
         const y = canvas.height / 2 + (Math.random() * canvas.height - canvas.height / 2);
         
         // Ensure obstacles don't spawn too close vertically to existing ones
         let tooClose = false;
         for (let obs of obstacles) {
-            if (Math.abs(obs.y - y) < size) {
+            if (Math.abs(obs.y - y) < size * 0.8) {
                 tooClose = true;
                 break;
             }
         }
 
         if (!tooClose) {
-            obstacles.push({ x, y, size, color: '#f22' });
+            // At higher tiers, obstacle color shifts toward orange/red
+            let color = '#f22';
+            if (tier >= 4) color = '#ff4400';
+            if (tier >= 5) color = '#ff0066';
+            obstacles.push({ x, y, size, color, passed: false });
         }
     }
 
@@ -367,14 +487,67 @@
         }
     }
 
+    function getSpeedTier(s) {
+        let tier = 0;
+        for (let i = SPEED_TIERS.length - 1; i >= 0; i--) {
+            if (s >= SPEED_TIERS[i].score) { tier = i; break; }
+        }
+        return tier;
+    }
+
+    function lerpColor(a, b, t) {
+        const ah = parseInt(a.slice(1), 16), bh = parseInt(b.slice(1), 16);
+        const ar = ah >> 16, ag = (ah >> 8) & 0xff, ab = ah & 0xff;
+        const br = bh >> 16, bg = (bh >> 8) & 0xff, bb = bh & 0xff;
+        const rr = Math.round(ar + (br - ar) * t);
+        const rg = Math.round(ag + (bg - ag) * t);
+        const rb = Math.round(ab + (bb - ab) * t);
+        return `rgb(${rr},${rg},${rb})`;
+    }
+
     function update() {
-        // Increase difficulty
-        speed += 0.003;
+        const displayScore = Math.floor(score / 10);
+
+        // Increase difficulty — faster ramp with tier milestones
+        const tier = getSpeedTier(displayScore);
+        if (tier !== currentTier) {
+            currentTier = tier;
+            const ti = SPEED_TIERS[tier];
+            speed += 2 + tier * 1.5; // Big speed jump on tier up
+            screenShake = 12;
+            // Show tier announcement
+            speedTierEl.textContent = ti.label;
+            speedTierEl.style.color = `hsl(${ti.hue}, 100%, 60%)`;
+            speedTierEl.classList.add('show');
+            setTimeout(() => speedTierEl.classList.remove('show'), 2000);
+            createParticles(player.x, player.y, `hsl(${ti.hue},100%,60%)`, 30);
+        }
+
+        // Base ramp: starts at 0.008, increases slightly with tier
+        speed += 0.008 + tier * 0.002;
+
         score++;
-        scoreDisplay.innerText = `Score: ${Math.floor(score / 10)}`;
+        scoreDisplay.innerText = `Score: ${displayScore}`;
 
         // Smooth player movement (Lerp)
         player.y += (player.targetY - player.y) * 0.15;
+
+        // Hue shift with speed
+        const hueShift = (speed - 5) * 4;
+        baseHue = 180 + hueShift % 360;
+
+        // Speed meter
+        const maxSpeed = 25;
+        const pct = Math.min(speed / maxSpeed, 1) * 100;
+        speedFill.style.width = pct + '%';
+        const tierHue = SPEED_TIERS[currentTier].hue;
+        speedFill.style.background = `hsl(${tierHue}, 100%, 55%)`;
+        speedFill.style.boxShadow = `0 0 8px hsl(${tierHue}, 100%, 55%)`;
+        speedBadge.textContent = `SPD ${speed.toFixed(1)}`;
+        speedBadge.style.color = `hsl(${tierHue}, 80%, 50%)`;
+
+        // Vignette intensity
+        vignetteEl.style.opacity = Math.min((speed - 8) * 0.05, 0.6);
 
         // Combo system
         comboTimer--;
@@ -387,11 +560,22 @@
             comboDisplay.classList.add('show');
         }
 
-        // Spawn obstacles
+        // Spawn obstacles — faster at higher tiers
+        const spawnThreshold = (50 - speed * 2) * SPEED_TIERS[currentTier].spawnMul;
         spawnTimer++;
-        if (spawnTimer > 60 - (speed * 2)) { // Spawn faster as game speeds up
+        if (spawnTimer > Math.max(spawnThreshold, 8)) {
             spawnTimer = 0;
             spawnObstacle();
+            // At high tiers, sometimes spawn extras
+            if (currentTier >= 3 && Math.random() < 0.3) {
+                spawnObstacle();
+            }
+        }
+
+        // Close call flash decay
+        if (closeCallTimer > 0) {
+            closeCallTimer--;
+            closeFlash.style.opacity = String(closeCallTimer / 8);
         }
 
         // Update Obstacles
@@ -407,6 +591,15 @@
 
             if (dist < minDist) {
                 gameOver();
+                return;
+            }
+
+            // Close call detection — flash when obstacle passes player
+            if (!obs.passed && obs.x < player.x - obs.size / 2) {
+                obs.passed = true;
+                if (dist < minDist * 2.5) {
+                    closeCallTimer = 8;
+                }
             }
 
             // Remove off-screen
@@ -444,7 +637,7 @@
             ctx.translate(shakeX, shakeY);
         }
 
-        // Draw Background Grid
+        // Draw Background Grid — color shifts with speed
         drawGrid();
 
         // Draw Stars
@@ -460,23 +653,26 @@
         });
         ctx.globalAlpha = 1;
 
-        // Draw Player Trail
+        // Draw Player Trail — longer at higher speed
         if (gameRunning) {
             player.trail.push({ x: player.x, y: player.y });
-            if (player.trail.length > 10) player.trail.shift();
+            const maxTrail = 10 + Math.floor((speed - 5) * 2);
+            while (player.trail.length > maxTrail) player.trail.shift();
 
             player.trail.forEach((t, i) => {
-                ctx.globalAlpha = 0.3 + (i / 10) * 0.5;
+                const alpha = 0.3 + (i / maxTrail) * 0.5;
+                ctx.globalAlpha = alpha;
                 ctx.fillStyle = player.color;
                 ctx.beginPath();
-                ctx.arc(t.x, t.y, player.radius * (i / 10), 0, Math.PI * 2);
+                ctx.arc(t.x, t.y, player.radius * (i / maxTrail), 0, Math.PI * 2);
                 ctx.fill();
             });
             ctx.globalAlpha = 1;
         }
 
-        // Draw Player
-        ctx.shadowBlur = 20;
+        // Draw Player — glow intensifies with speed
+        const glowSize = 20 + (speed - 5) * 3;
+        ctx.shadowBlur = glowSize;
         ctx.shadowColor = player.color;
         ctx.fillStyle = player.color;
         ctx.beginPath();
@@ -484,7 +680,7 @@
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // Draw Eyes on player (cute factor)
+        // Draw Eyes on player
         ctx.fillStyle = '#000';
         const eyeOffset = 5;
         ctx.beginPath();
@@ -492,13 +688,13 @@
         ctx.arc(player.x + eyeOffset, player.y - 3, 3, 0, Math.PI * 2);
         ctx.fill();
 
-        // Draw Obstacles
+        // Draw Obstacles — glow and size based on tier
         obstacles.forEach(obs => {
-            ctx.shadowBlur = 15;
+            const tier = currentTier;
+            ctx.shadowBlur = 15 + tier * 3;
             ctx.shadowColor = obs.color;
             ctx.fillStyle = obs.color;
 
-            // Draw a rounded rect or diamond
             ctx.beginPath();
             ctx.moveTo(obs.x, obs.y - obs.size / 2);
             ctx.lineTo(obs.x + obs.size / 2, obs.y);
@@ -507,11 +703,22 @@
             ctx.closePath();
             ctx.fill();
             
-            // Inner core
+            // Inner core — larger at higher tiers
+            const coreSize = obs.size / 4 + tier * 0.5;
             ctx.fillStyle = '#fff';
             ctx.beginPath();
-            ctx.arc(obs.x, obs.y, obs.size / 4, 0, Math.PI * 2);
+            ctx.arc(obs.x, obs.y, coreSize, 0, Math.PI * 2);
             ctx.fill();
+
+            // At high tiers, add trailing particles to obstacles
+            if (tier >= 2 && Math.random() < 0.4) {
+                ctx.globalAlpha = 0.4;
+                ctx.fillStyle = obs.color;
+                ctx.beginPath();
+                ctx.arc(obs.x + obs.size / 2, obs.y + (Math.random() - 0.5) * 4, 2, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
             ctx.shadowBlur = 0;
         });
 
@@ -519,7 +726,8 @@
     }
 
     function drawGrid() {
-        ctx.strokeStyle = 'rgba(0, 255, 255, 0.05)';
+        const hue = baseHue;
+        ctx.strokeStyle = `hsla(${hue}, 100%, 60%, 0.05)`;
         ctx.lineWidth = 1;
         
         const gridSize = 50;
@@ -608,6 +816,12 @@
         combo = 0;
         comboTimer = 0;
         screenShake = 0;
+        closeCallTimer = 0;
+        currentTier = 0;
+        baseHue = 180;
+        speedFill.style.width = '0%';
+        speedTierEl.classList.remove('show');
+        vignetteEl.style.opacity = '0';
         player.y = canvas.height / 2;
         player.targetY = canvas.height / 2;
         
