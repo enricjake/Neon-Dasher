@@ -508,12 +508,12 @@
     function update() {
         const displayScore = Math.floor(score / 10);
 
-        // Increase difficulty — faster ramp with tier milestones
+        // Increase difficulty — smoother ramp with tier milestones
         const tier = getSpeedTier(displayScore);
         if (tier !== currentTier) {
             currentTier = tier;
             const ti = SPEED_TIERS[tier];
-            speed += 2 + tier * 1.5; // Big speed jump on tier up
+            speed += 0.4 + tier * 0.1; // Small, steady speed bump on tier up
             screenShake = 12;
             // Show tier announcement
             speedTierEl.textContent = ti.label;
@@ -523,8 +523,9 @@
             createParticles(player.x, player.y, `hsl(${ti.hue},100%,60%)`, 30);
         }
 
-        // Base ramp: starts at 0.008, increases slightly with tier
-        speed += 0.008 + tier * 0.002;
+        // Base ramp: slower per-frame increase plus tiny tier bonus, capped at the meter max
+        speed += 0.004 + tier * 0.001;
+        if (speed > 25) speed = 25;
 
         score++;
         scoreDisplay.innerText = `Score: ${displayScore}`;
