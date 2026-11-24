@@ -2,6 +2,8 @@
 
 A fast-paced, single-file browser game built with vanilla JavaScript and HTML5 Canvas.
 
+![Neon Dasher gameplay](assets/neon-dasher.png)
+
 ## 🎮 Play
 
 [Live Demo](https://enricjake.github.io/Neon-Dasher/)
